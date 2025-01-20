@@ -1,10 +1,21 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import click
 from pioreactor.cluster_management import get_workers_in_inventory
 from pioreactor.pubsub import get_from
+from pioreactor.pubsub import post_into
 from pioreactor.utils.networking import resolve_to_address
+from pioreactor.utils.timing import current_utc_datetime
+from pioreactor.utils.timing import current_utc_timestamp
 from pioreactor.cli.calibrations import calibration
 from pioreactor.calibrations import utils
-import click
 
+
+def simple_prefix_hash(s: str) -> str:
+    import hashlib
+
+    return hashlib.md5(s.encode()).hexdigest()[:4]
 
 def polynomial_features(x: list[float], degree: int):
     """
@@ -47,7 +58,7 @@ def fit_model(X_list, y_list, d, lambda_w=0.1, lambda_a=0.1,
 
     A = np.ones(N)
 
-    prev_obj = 1000000
+    prev_obj = 1_000_000
 
     for it in range(max_iter):
         # === 1) Update A_i for each subject, given current w
@@ -131,11 +142,11 @@ def main(device):
     N = len(data_from_workers)
 
     # 2. Get some metadata from the user.
-    prefix = click.prompt("Prefix for the new fused calibrations", type=str, default="fused-")
+    prefix = click.prompt("Prefix for the new calibrations", type=str, default=f"shrunk-{simple_prefix_hash(current_utc_timestamp())}-")
 
 
     while True:
-        degree = click.prompt("Degree of polynomial to fit", type=int, default=4) + 1
+        degree = click.prompt("Degree of polynomial to fit", type=int, default=3) + 1
         lambda_a = click.prompt("Parameter for bringing calibrations closer to the average. Higher is more closeness.", type=float, default=5)
         lambda_w = 0.05
 
@@ -145,14 +156,27 @@ def main(device):
         except Exception as e:
             print(e)
 
-        print()
-        print(utils.curve_to_functional_form("poly", w_est))
-        print(a_est)
-        print()
-
-        # confirm with user
+        click.echo()
+        click.echo(utils.curve_to_functional_form("poly", w_est))
+        click.echo(a_est)
+        if click.confirm("Okay with results?"):
+            break
+        click.echo()
 
     # distribute to workers
+    for i, worker in enumerate(data_from_workers):
+        cal = data_from_workers[worker]
+        cal['curve_data_'] = (a_est[i] * w_est).tolist()
+        cal['curve_type'] = "poly"
+        cal['created_at'] = current_utc_datetime()
+        cal['calibration_name'] = f"{prefix}{cal['calibration_name']}"
+        try:
+            r = post_into(resolve_to_address(worker), f'/unit_api/calibrations/{device}', json=cal)
+            r.raise_for_status()
+            click.echo(green(f"Sent to {worker} successfully."))
+        except Exception as e:
+            print(e)
+    #
 
 @calibration.command(name="shrinkage", help="shrink calibrations across the cluster")
 @click.option("--device", required=True)
