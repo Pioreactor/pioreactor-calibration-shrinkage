@@ -7,7 +7,7 @@ from setuptools import setup
 
 setup(
     name="pioreactor-calibration-shrinkage",
-    version="0.1.0",
+    version="1.0.0",
     license="MIT",
     description="Fuse multiple calibrations into better calibrations",
     long_description=open("README.md").read(),
@@ -17,5 +17,7 @@ setup(
     url="https://github.com/Pioreactor/pioreactor-calibration-shrinkage",
     packages=find_packages(),
     include_package_data=True,
-    entry_points={"pioreactor.plugins": "pioreactor_calibration_shrinkage = pioreactor_calibration_shrinkage"},
+    entry_points={
+        "pioreactor.plugins": "pioreactor_calibration_shrinkage = pioreactor_calibration_shrinkage"
+    },
 )
