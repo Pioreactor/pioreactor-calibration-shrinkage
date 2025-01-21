@@ -10,7 +10,10 @@ from pioreactor.utils.timing import current_utc_datetime
 from pioreactor.utils.timing import current_utc_timestamp
 from pioreactor.cli.calibrations import calibration
 from pioreactor.calibrations import utils
-
+from pioreactor.whoami import get_unit_name
+from pioreactor.whoami import UNIVERSAL_EXPERIMENT
+from pioreactor.utils import managed_lifecycle
+from pioreactor.logging import create_logger
 
 def simple_prefix_hash(s: str) -> str:
     import hashlib
@@ -114,69 +117,76 @@ def green(text):
     return click.style(text, fg="green")
 
 def main(device):
-    # 1. get the device calibrations per worker
-    data_from_workers = {}
 
-    for worker in get_workers_in_inventory():
-        try:
-            calibrations = get_from(resolve_to_address(worker), f'/unit_api/calibrations/{device}').json()
-        except Exception as e:
-            print(e)
-            continue
-        click.clear()
-        click.echo(green(f"""Select which calibration to use from {worker}:"""))
-        click.echo()
-        for cal in calibrations:
+    logger = create_logger("shrink_calibrations", experiment=UNIVERSAL_EXPERIMENT)
+    logger.info("Starting calibration shrinkage.")
+    with managed_lifecycle(get_unit_name(), UNIVERSAL_EXPERIMENT, "shrink_calibrations") as state:
 
-            click.echo(f" •{cal['calibration_name']}, created at {cal['created_at']}")
+        # 1. get the device calibrations per worker
+        data_from_workers = {}
 
-        click.echo()
-        calibration_name = click.prompt(
-            "Enter calibration name (SKIP to skip worker):",
-            type=click.Choice([cal["calibration_name"] for cal in calibrations] + ["SKIP"]),
-        )
-        if calibration_name == "SKIP":
-            continue
-        data_from_workers[worker] = cal
+        for worker in get_workers_in_inventory():
+            try:
+                calibrations = get_from(resolve_to_address(worker), f'/unit_api/calibrations/{device}').json()
+            except Exception as e:
+                print(e)
+                continue
+            click.clear()
+            click.echo(green(f"""Select which calibration to use from {worker}:"""))
+            click.echo()
+            for cal in calibrations:
+                click.echo(f"  •{'✓' if cal['is_active'] else ' '} {cal['calibration_name']}")
 
-    N = len(data_from_workers)
+            click.echo()
+            calibration_name = click.prompt(
+                "Enter calibration name (SKIP to skip worker)",
+                type=click.Choice([cal["calibration_name"] for cal in calibrations] + ["SKIP"]),
+                show_choices=False
+            )
+            if calibration_name == "SKIP":
+                continue
 
-    # 2. Get some metadata from the user.
-    prefix = click.prompt("Prefix for the new calibrations", type=str, default=f"shrunk-{simple_prefix_hash(current_utc_timestamp())}-")
+            data_from_workers[worker] = cal
+
+        N = len(data_from_workers)
+
+        # 2. Get some metadata from the user.
+        prefix = click.prompt("Prefix for the new calibrations", type=str, default=f"shrunk-{simple_prefix_hash(current_utc_timestamp())}-")
 
 
-    while True:
-        degree = click.prompt("Degree of polynomial to fit", type=int, default=3) + 1
-        lambda_a = click.prompt("Parameter for bringing calibrations closer to the average. Higher is more closeness.", type=float, default=5)
-        lambda_w = 0.05
+        while True:
+            degree = click.prompt("Degree of polynomial to fit", type=int, default=3) + 1
+            lambda_a = click.prompt("Parameter for bringing calibrations closer to the average. Higher is more closeness.", type=float, default=5)
+            lambda_w = 0.05
 
-        list_X, list_Y = prepare_data(data_from_workers.values(), degree)
-        try:
-            w_est, a_est = fit_model(list_X, list_Y, degree, lambda_a=lambda_a/N, lambda_w=lambda_w/N/degree, tol=1e-8, verbose=True, max_iter=500)
-        except Exception as e:
-            print(e)
+            list_X, list_Y = prepare_data(data_from_workers.values(), degree)
+            try:
+                w_est, a_est = fit_model(list_X, list_Y, degree, lambda_a=lambda_a/N, lambda_w=lambda_w/N/degree, tol=1e-8, verbose=True, max_iter=500)
+            except Exception as e:
+                print(e)
 
-        click.echo()
-        click.echo(utils.curve_to_functional_form("poly", w_est))
-        click.echo(a_est)
-        if click.confirm("Okay with results?"):
-            break
-        click.echo()
+            click.echo()
+            logger.info(f"{degree=}, {lambda_a=}")
+            logger.info(f"kernel polynomial = {utils.curve_to_functional_form("poly", w_est)}")
+            logger.info(f"worker-specific scalars = {a_est.tolist()}")
+            if click.confirm("Okay with results?"):
+                break
+            click.echo()
 
-    # distribute to workers
-    for i, worker in enumerate(data_from_workers):
-        cal = data_from_workers[worker]
-        cal['curve_data_'] = (a_est[i] * w_est).tolist()
-        cal['curve_type'] = "poly"
-        cal['created_at'] = current_utc_datetime()
-        cal['calibration_name'] = f"{prefix}{cal['calibration_name']}"
-        try:
-            r = post_into(resolve_to_address(worker), f'/unit_api/calibrations/{device}', json=cal)
-            r.raise_for_status()
-            click.echo(green(f"Sent to {worker} successfully."))
-        except Exception as e:
-            print(e)
-    #
+        # distribute to workers
+        for i, worker in enumerate(data_from_workers):
+            cal = data_from_workers[worker]
+            cal['curve_data_'] = (a_est[i] * w_est).tolist()
+            cal['curve_type'] = "poly"
+            cal['created_at'] = current_utc_datetime()
+            cal['calibration_name'] = f"{prefix}{cal['calibration_name']}"
+            try:
+                r = post_into(resolve_to_address(worker), f'/unit_api/calibrations/{device}', json=cal)
+                r.raise_for_status()
+                logger.info(f"Sent new {device} calibration `{cal['calibration_name']}` to {worker} successfully.")
+            except Exception as e:
+                print(e)
+
 
 @calibration.command(name="shrinkage", help="shrink calibrations across the cluster")
 @click.option("--device", required=True)
