@@ -155,7 +155,9 @@ def main(device):
             if calibration_name == "SKIP":
                 continue
 
-            data_from_workers[worker] = cal
+            data_from_workers[worker] = next(
+                cal for cal in calibrations if cal["calibration_name"] == calibration_name
+            )
 
         N = len(data_from_workers)
         if N <= 1:
