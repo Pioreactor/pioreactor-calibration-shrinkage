@@ -20,8 +20,8 @@ Before using this plugin, ensure you have:
 ## Installation
 
 There are three options:
-1. Install this plugin on your leader via the UI's Plugin page (requires internet access)
-2. Install this plugin on your leader via `pio plugins install pioreactor-calibration-shrinkage` (requires internet access)
+1. Install this plugin on your leader via the UI's Plugin page **(requires internet access)**
+2. Install this plugin on your leader via `pio plugins install pioreactor-calibration-shrinkage` **(requires internet access)**
 3. Or copy the `__init__.py` file's contents into a new `.py` file in the `~/.pioreactor/plugins` directory on your leader.
 
 
@@ -32,7 +32,7 @@ There are three options:
 Use the following command to start the shrink calibration process:
 
 ```bash
-pioreactor calibrations shrinkage --device <DEVICE>
+pio calibrations shrinkage --device <DEVICE>
 ```
 
 Replace `<DEVICE>` with the device you want to shrink calibrations for (e.g., `pump`, `sensor`).
