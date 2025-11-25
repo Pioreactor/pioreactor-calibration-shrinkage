@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 import click
+import yaml
 from pioreactor.calibrations import utils
 from pioreactor.cli.calibrations import calibration
 from pioreactor.cluster_management import get_workers_in_inventory
@@ -29,11 +30,11 @@ def polynomial_features(x: list[float], degree: int):
     """
     import numpy as np
 
-    x = np.asarray(x).flatten()
-    n = x.shape[0]
+    x_ = np.asarray(x).flatten()
+    n = x_.shape[0]
     X = np.zeros((n, degree))
     for j in range(degree):
-        X[:, j] = x ** (degree - 1 - j)
+        X[:, j] = x_ ** (degree - 1 - j)
     return X
 
 
@@ -124,10 +125,22 @@ def green(text):
     return click.style(text, fg="green")
 
 
+def send_calibration_to_worker(worker: str, device: str, calibration: dict):
+    """Serialize the calibration and send it to the worker API."""
+    yaml_payload = yaml.safe_dump(calibration)
+    return post_into(
+        resolve_to_address(worker),
+        f"/unit_api/calibrations/{device}",
+        json={"calibration_data": yaml_payload},
+    )
+
+
 def main(device):
     logger = create_logger("shrink_calibrations", experiment=UNIVERSAL_EXPERIMENT)
     logger.info(f"Starting shrinkage of calibrations for {device}.")
-    with managed_lifecycle(get_unit_name(), UNIVERSAL_EXPERIMENT, "shrink_calibrations"):
+    with managed_lifecycle(
+        get_unit_name(), UNIVERSAL_EXPERIMENT, "shrink_calibrations", ignore_is_active_state=True
+    ):
         # 1. get the device calibrations per worker
         data_from_workers = {}
 
@@ -209,9 +222,11 @@ def main(device):
             cal["curve_type"] = "poly"
             cal["created_at"] = current_utc_datetime()
             cal["calibration_name"] = f"{prefix}{cal['calibration_name']}"
+            # convert to yaml to sendd
+
             try:
-                r = post_into(resolve_to_address(worker), f"/unit_api/calibrations/{device}", json=cal)
-                r.raise_for_status()
+                response = send_calibration_to_worker(worker, device, cal)
+                response.raise_for_status()
                 logger.info(
                     f"Sent new {device} calibration `{cal['calibration_name']}` to {worker} successfully."
                 )
